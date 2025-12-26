@@ -49,14 +49,30 @@ pip install -r requirements.txt
 output_dino/checkpoint.pth
 ```
 
-### 3. Запуск оценки
+### 3. Запуск инференса (с OCR)
 
 **Windows (BAT файл):**
+```bash
+run_inference.bat my_images
+```
+
+**Ручной запуск:**
+```bash
+python run_inference.py --checkpoint output_dino/checkpoint.pth --images_dir my_images --use_ocr
+```
+
+**Выходные файлы:**
+- `summary_by_species.csv` — количество особей по видам
+- `detailed_detections.csv` — анализ по фреймам (дата, время, температура, камера)
+
+### 4. Оценка модели (ROC AUC)
+
 ```bash
 run_evaluation.bat my_dataset
 ```
 
-**Ручной запуск:**
+или:
+
 ```bash
 python evaluate_model.py --checkpoint output_dino/checkpoint.pth --coco_path my_dataset
 ```
