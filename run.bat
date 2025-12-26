@@ -2,7 +2,7 @@
 chcp 65001 >nul
 echo.
 echo ================================================================================
-echo   ИНФЕРЕНС DINO С OCR МЕТАДАННЫМИ
+echo   АНАЛИЗ МОДЕЛИ DINO ДЛЯ ДЕТЕКЦИИ ЖИВОТНЫХ
 echo   HSE Zapovednik Project
 echo ================================================================================
 echo.
@@ -29,12 +29,19 @@ if not exist "output_dino\checkpoint.pth" (
 
 REM Проверка параметров
 set IMAGES_DIR=%1
+set ANNOTATIONS=%2
+
 if "%IMAGES_DIR%"=="" (
-    echo [INFO] Использование: run_inference.bat ^<путь_к_изображениям^>
+    echo [INFO] Использование:
     echo.
-    echo        Пример: run_inference.bat my_images
+    echo   run.bat ^<путь_к_изображениям^> [путь_к_аннотациям]
     echo.
-    echo        Папка должна содержать изображения (.jpg, .png)
+    echo   Примеры:
+    echo     run.bat my_images
+    echo     run.bat my_images annotations.json
+    echo.
+    echo   Папка должна содержать изображения (.jpg, .png)
+    echo   Аннотации (опционально) - для расчёта ROC AUC
     echo.
     pause
     exit /b 1
@@ -49,22 +56,29 @@ if not exist "%IMAGES_DIR%" (
 
 echo [INFO] Checkpoint: output_dino\checkpoint.pth
 echo [INFO] Images: %IMAGES_DIR%
+if not "%ANNOTATIONS%"=="" (
+    echo [INFO] Annotations: %ANNOTATIONS%
+)
 echo [INFO] OCR: Включен
 echo.
 
-REM Запуск инференса
-python run_inference.py --checkpoint output_dino/checkpoint.pth --images_dir %IMAGES_DIR% --use_ocr
+REM Запуск анализа
+if "%ANNOTATIONS%"=="" (
+    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir %IMAGES_DIR% --use_ocr
+) else (
+    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir %IMAGES_DIR% --annotations %ANNOTATIONS% --use_ocr
+)
 
 echo.
 echo ================================================================================
-echo   ИНФЕРЕНС ЗАВЕРШЁН
-echo   Результаты сохранены в папке: inference_results
+echo   АНАЛИЗ ЗАВЕРШЁН
+echo   Результаты сохранены в папке: results
 echo ================================================================================
 echo.
 echo   Созданные файлы:
-echo     - summary_by_species.csv    (Таблица 1: количество особей)
-echo     - detailed_detections.csv   (Таблица 2: анализ по фреймам)
-echo     - inference_results.json    (полные данные)
+echo     - summary_by_species.csv      (Таблица 1: количество особей)
+echo     - detailed_detections.csv     (Таблица 2: анализ по фреймам)
+echo     - analysis_results.json       (ROC AUC + полные данные)
 echo.
 pause
 

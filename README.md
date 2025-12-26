@@ -10,21 +10,6 @@
 | **Overall Recall** | 0.9940 |
 | Эпох обучения | 32 |
 
-### Метрики по классам
-
-| Класс | ROC AUC | AP |
-|-------|---------|-----|
-| bear | 1.0000 | 1.0000 |
-| wolf | 1.0000 | 1.0000 |
-| lynx | 1.0000 | 1.0000 |
-| boar | 1.0000 | 1.0000 |
-| fox | 1.0000 | 1.0000 |
-| capercaillie | 1.0000 | 1.0000 |
-| deer | 1.0000 | 1.0000 |
-| moose | 0.9927 | 0.8970 |
-| mountain_hare | 0.9820 | 0.9157 |
-| raccoon_dog | 0.9593 | 0.7507 |
-
 ---
 
 ## Быстрый старт
@@ -49,74 +34,79 @@ pip install -r requirements.txt
 output_dino/checkpoint.pth
 ```
 
-### 3. Запуск инференса (с OCR)
+### 3. Запуск анализа
 
 **Windows (BAT файл):**
 ```bash
-run_inference.bat my_images
+run.bat my_images
+```
+
+**С аннотациями (для ROC AUC):**
+```bash
+run.bat my_images annotations.json
 ```
 
 **Ручной запуск:**
 ```bash
-python run_inference.py --checkpoint output_dino/checkpoint.pth --images_dir my_images --use_ocr
-```
-
-**Выходные файлы:**
-- `summary_by_species.csv` — количество особей по видам
-- `detailed_detections.csv` — анализ по фреймам (дата, время, температура, камера)
-
-### 4. Оценка модели (ROC AUC)
-
-```bash
-run_evaluation.bat my_dataset
-```
-
-или:
-
-```bash
-python evaluate_model.py --checkpoint output_dino/checkpoint.pth --coco_path my_dataset
+python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir my_images --use_ocr
 ```
 
 ---
 
-## Формат датасета
+## Выходные файлы
 
-Датасет должен быть в формате COCO:
+После анализа в папке `results/` появятся:
+
+| Файл | Описание |
+|------|----------|
+| `summary_by_species.csv` | **Таблица 1:** Количество особей по видам |
+| `detailed_detections.csv` | **Таблица 2:** Анализ по фреймам (дата, время, температура, камера) |
+| `analysis_results.json` | ROC AUC + полные данные в JSON |
+
+### Пример summary_by_species.csv
 
 ```
-my_dataset/
-├── annotations/
-│   └── instances_val2017.json
-└── val2017/
-    ├── image1.jpg
-    ├── image2.png
-    └── ...
+Вид (EN),Вид (RU),Количество особей
+deer,Олень,75
+moose,Лось,91
+bear,Медведь,9
+wolf,Волк,4
+TOTAL,ИТОГО,250
 ```
 
-### Формат instances_val2017.json
+### Пример detailed_detections.csv
 
-```json
-{
-  "images": [
-    {"id": 1, "file_name": "image1.jpg", "width": 1920, "height": 1080}
-  ],
-  "annotations": [
-    {
-      "id": 1,
-      "image_id": 1,
-      "category_id": 1,
-      "bbox": [x, y, width, height],
-      "area": 12345,
-      "iscrowd": 0
-    }
-  ],
-  "categories": [
-    {"id": 1, "name": "mountain_hare"},
-    {"id": 2, "name": "badger"},
-    ...
-  ]
-}
 ```
+file_name,class_name,class_name_ru,confidence,date,time,temperature,camera_id,bbox
+img24_6.jpg,deer,Олень,0.9710,2024-05-15,14:32:45,-5°C,CAM01,[...]
+frame_001.png,moose,Лось,0.9532,2024-05-15,08:15:22,-3°C,CAM02,[...]
+```
+
+---
+
+## Параметры
+
+```bash
+python run_analysis.py \
+    --checkpoint output_dino/checkpoint.pth \
+    --images_dir my_images \
+    --annotations annotations.json \
+    --conf_threshold 0.3 \
+    --use_ocr \
+    --device cuda \
+    --output_dir results
+```
+
+| Параметр | По умолчанию | Описание |
+|----------|--------------|----------|
+| `--checkpoint` | `output_dino/checkpoint.pth` | Путь к весам модели |
+| `--images_dir` | - | Папка с изображениями (обязательный) |
+| `--annotations` | - | Файл аннотаций COCO для ROC AUC (опционально) |
+| `--conf_threshold` | 0.3 | Порог уверенности |
+| `--use_ocr` | True | Извлечение метаданных через OCR |
+| `--no_ocr` | - | Отключить OCR |
+| `--device` | cuda | Устройство (cuda/cpu) |
+| `--output_dir` | `results` | Папка для результатов |
 
 ---
 
@@ -143,45 +133,46 @@ my_dataset/
 
 ---
 
-## Выходные файлы
+## Формат аннотаций (для ROC AUC)
 
-После оценки в папке `evaluation_results/` появятся:
+Для расчёта ROC AUC нужен файл аннотаций в формате COCO:
 
-| Файл | Описание |
-|------|----------|
-| `metrics_by_class.csv` | Таблица метрик по классам (GT, TP, FP, Precision, Recall, ROC AUC, AP) |
-| `detections.csv` | Топ-50 детекций с наивысшей уверенностью |
-| `evaluation_results.json` | Все результаты в JSON |
-
----
-
-## Параметры
-
-```bash
-python evaluate_model.py \
-    --checkpoint output_dino/checkpoint.pth \
-    --coco_path my_dataset \
-    --iou_threshold 0.5 \
-    --conf_threshold 0.3 \
-    --device cuda \
-    --output_dir evaluation_results
+```json
+{
+  "images": [
+    {"id": 1, "file_name": "image1.jpg", "width": 1920, "height": 1080}
+  ],
+  "annotations": [
+    {
+      "id": 1,
+      "image_id": 1,
+      "category_id": 1,
+      "bbox": [x, y, width, height],
+      "area": 12345,
+      "iscrowd": 0
+    }
+  ],
+  "categories": [
+    {"id": 1, "name": "mountain_hare"},
+    {"id": 2, "name": "badger"}
+  ]
+}
 ```
 
-| Параметр | По умолчанию | Описание |
-|----------|--------------|----------|
-| `--checkpoint` | `output_dino/checkpoint.pth` | Путь к весам модели |
-| `--coco_path` | - | Путь к датасету (обязательный) |
-| `--iou_threshold` | 0.5 | Порог IoU для matching |
-| `--conf_threshold` | 0.3 | Порог уверенности |
-| `--device` | cuda | Устройство (cuda/cpu) |
-| `--output_dir` | `evaluation_results` | Папка для результатов |
-
 ---
 
-## Обучение
+## Структура проекта
 
-```bash
-python train_dino_zapovednik.py --epochs 50
+```
+dino-detection/
+├── DINO/                    # Модель DINO
+├── output_dino/
+│   └── checkpoint.pth       # Веса модели (скачать отдельно)
+├── run_analysis.py          # Главный скрипт анализа
+├── run.bat                  # BAT для запуска
+├── train_dino_zapovednik.py # Скрипт обучения
+├── requirements.txt         # Зависимости
+└── README.md
 ```
 
 ---
@@ -195,31 +186,11 @@ python train_dino_zapovednik.py --epochs 50
 
 ---
 
-## Структура проекта
-
-```
-hse-zapovednik/
-├── DINO/                    # Модель DINO
-│   ├── config/              # Конфигурации
-│   ├── models/              # Архитектура модели
-│   └── ...
-├── output_dino/             # Checkpoints
-│   └── checkpoint.pth
-├── coco_dataset_final/      # Обучающий датасет
-├── evaluate_model.py        # Скрипт оценки
-├── train_dino_zapovednik.py # Скрипт обучения
-├── run_evaluation.bat       # BAT для быстрого запуска
-├── requirements.txt         # Зависимости
-└── README.md               # Этот файл
-```
-
----
-
 ## Решение проблем
 
 ### CUDA out of memory
 ```bash
-python evaluate_model.py --device cpu ...
+python run_analysis.py --device cpu ...
 ```
 
 ### DLL load failed
@@ -236,4 +207,3 @@ C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin
 ## Автор
 
 HSE Zapovednik Project
-

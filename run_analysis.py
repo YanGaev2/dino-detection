@@ -1,11 +1,13 @@
 """
-Инференс DINO с извлечением метаданных через OCR
-Выходные таблицы:
-1. summary_by_species.csv - количество особей по видам
-2. detailed_detections.csv - детальный анализ по фреймам (дата, время, температура, камера)
+Анализ модели DINO для детекции животных
+- ROC AUC score
+- Таблица 1: Количество особей по видам
+- Таблица 2: Детальный анализ по фреймам (дата, время, температура, камера через OCR)
 
 Использование:
-    python run_inference.py --checkpoint output_dino/checkpoint.pth --images_dir my_images
+    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir my_images
+
+Автор: HSE Zapovednik Project
 """
 import os
 import sys
@@ -29,6 +31,7 @@ from datetime import datetime
 from collections import defaultdict
 from PIL import Image
 import torchvision.transforms as T
+from sklearn.metrics import roc_auc_score, average_precision_score
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -39,155 +42,9 @@ sys.path.insert(0, str(Path("DINO").absolute()))
 ocr_reader = None
 
 
-def get_ocr_reader():
-    """Lazy initialization of EasyOCR reader"""
-    global ocr_reader
-    if ocr_reader is None:
-        import easyocr
-        print("[OCR] Инициализация EasyOCR...")
-        ocr_reader = easyocr.Reader(['ru', 'en'], gpu=torch.cuda.is_available(), verbose=False)
-        print("[OCR] EasyOCR готов")
-    return ocr_reader
-
-
-def extract_metadata_ocr(image_path):
-    """
-    Извлечение метаданных из водяного знака изображения через OCR
-    Возвращает: date, time, temperature, camera_id
-    """
-    try:
-        img = Image.open(image_path)
-        width, height = img.size
-        
-        # Обрезаем нижние 12% изображения (там обычно водяной знак)
-        crop_top = int(height * 0.88)
-        watermark_region = img.crop((0, crop_top, width, height))
-        
-        # OCR
-        reader = get_ocr_reader()
-        watermark_np = np.array(watermark_region)
-        results = reader.readtext(watermark_np, detail=0)
-        
-        text = ' '.join(results).upper()
-        
-        # Парсинг даты (форматы: DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD)
-        date = None
-        date_patterns = [
-            r'(\d{2})[./](\d{2})[./](20\d{2})',  # DD.MM.YYYY or DD/MM/YYYY
-            r'(20\d{2})-(\d{2})-(\d{2})',         # YYYY-MM-DD
-        ]
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if match:
-                groups = match.groups()
-                if len(groups[0]) == 4:  # YYYY-MM-DD
-                    date = f"{groups[0]}-{groups[1]}-{groups[2]}"
-                else:  # DD.MM.YYYY
-                    date = f"{groups[2]}-{groups[1]}-{groups[0]}"
-                break
-        
-        # Парсинг времени (HH:MM:SS или HH:MM)
-        time_val = None
-        time_match = re.search(r'(\d{1,2})\s*[:;]\s*(\d{2})(?:\s*[:;]\s*(\d{2}))?', text)
-        if time_match:
-            h, m, s = time_match.groups()
-            s = s or '00'
-            time_val = f"{int(h):02d}:{m}:{s}"
-        
-        # Парсинг температуры (-XX°C, +XX°C, XXC)
-        temperature = None
-        temp_match = re.search(r'([+-]?\s*\d{1,2})\s*[°]?\s*[CС]', text)
-        if temp_match:
-            temp_str = temp_match.group(1).replace(' ', '')
-            temperature = f"{int(temp_str)}°C"
-        
-        # Парсинг ID камеры (CAM XX, CAMERA XX, ID: XX)
-        camera_id = None
-        cam_patterns = [
-            r'CAM\w*\s*[:#]?\s*(\w+)',
-            r'ID\s*[:#]?\s*(\w+)',
-            r'CAMERA\s*[:#]?\s*(\w+)',
-        ]
-        for pattern in cam_patterns:
-            match = re.search(pattern, text)
-            if match:
-                camera_id = match.group(1)
-                break
-        
-        return {
-            'date': date,
-            'time': time_val,
-            'temperature': temperature,
-            'camera_id': camera_id,
-            'ocr_raw': text[:100] if text else None
-        }
-        
-    except Exception as e:
-        print(f"[OCR] Ошибка при обработке {image_path}: {e}")
-        return {'date': None, 'time': None, 'temperature': None, 'camera_id': None, 'ocr_raw': None}
-
-
-def load_model(checkpoint_path, device='cuda'):
-    """Загрузка модели DINO"""
-    from models.dino import build_dino
-    from util.slconfig import SLConfig
-    
-    print(f"[MODEL] Загрузка конфигурации...")
-    config_path = "DINO/config/DINO/DINO_4scale_swinv2_zapovednik.py"
-    cfg = SLConfig.fromfile(config_path)
-    cfg.device = device
-    
-    print(f"[MODEL] Построение модели...")
-    model, criterion, postprocessors = build_dino(cfg)
-    model.to(device)
-    
-    print(f"[MODEL] Загрузка весов из {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model'], strict=False)
-    model.eval()
-    
-    epoch = checkpoint.get('epoch', 'unknown')
-    print(f"[MODEL] Модель загружена (эпоха: {epoch})")
-    
-    return model, postprocessors
-
-
-def run_inference_single(model, postprocessors, image_path, device='cuda', conf_threshold=0.3):
-    """Инференс на одном изображении"""
-    transform = T.Compose([
-        T.ToTensor(),
-        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
-    
-    img = Image.open(image_path).convert('RGB')
-    orig_w, orig_h = img.size
-    
-    img_tensor = transform(img).unsqueeze(0).to(device)
-    
-    with torch.no_grad():
-        outputs = model(img_tensor)
-    
-    orig_size = torch.tensor([[orig_h, orig_w]], device=device)
-    results = postprocessors['bbox'](outputs, orig_size)[0]
-    
-    scores = results['scores'].cpu().numpy()
-    labels = results['labels'].cpu().numpy()
-    boxes = results['boxes'].cpu().numpy()
-    
-    detections = []
-    for score, label, box in zip(scores, labels, boxes):
-        if score >= conf_threshold:
-            x1, y1, x2, y2 = box
-            detections.append({
-                'score': float(score),
-                'class_id': int(label),
-                'bbox': [float(x1), float(y1), float(x2 - x1), float(y2 - y1)]
-            })
-    
-    return detections
-
-
-# Маппинг классов
+# =============================================================================
+# КЛАССЫ ЖИВОТНЫХ
+# =============================================================================
 CLASS_NAMES = {
     1: 'mountain_hare',      # Заяц-беляк
     2: 'badger',             # Барсук
@@ -227,24 +84,276 @@ CLASS_NAMES_RU = {
 }
 
 
-def run_full_inference(args):
-    """Основная функция инференса с OCR"""
+# =============================================================================
+# OCR ФУНКЦИИ
+# =============================================================================
+def get_ocr_reader():
+    """Lazy initialization of EasyOCR reader"""
+    global ocr_reader
+    if ocr_reader is None:
+        import easyocr
+        print("[OCR] Инициализация EasyOCR...")
+        ocr_reader = easyocr.Reader(['ru', 'en'], gpu=torch.cuda.is_available(), verbose=False)
+        print("[OCR] EasyOCR готов")
+    return ocr_reader
+
+
+def extract_metadata_ocr(image_path):
+    """
+    Извлечение метаданных из водяного знака изображения через OCR
+    Возвращает: date, time, temperature, camera_id
+    """
+    try:
+        img = Image.open(image_path)
+        width, height = img.size
+        
+        # Обрезаем нижние 12% изображения (там обычно водяной знак)
+        crop_top = int(height * 0.88)
+        watermark_region = img.crop((0, crop_top, width, height))
+        
+        # OCR
+        reader = get_ocr_reader()
+        watermark_np = np.array(watermark_region)
+        results = reader.readtext(watermark_np, detail=0)
+        
+        text = ' '.join(results).upper()
+        
+        # Парсинг даты
+        date = None
+        date_patterns = [
+            r'(\d{2})[./](\d{2})[./](20\d{2})',
+            r'(20\d{2})-(\d{2})-(\d{2})',
+        ]
+        for pattern in date_patterns:
+            match = re.search(pattern, text)
+            if match:
+                groups = match.groups()
+                if len(groups[0]) == 4:
+                    date = f"{groups[0]}-{groups[1]}-{groups[2]}"
+                else:
+                    date = f"{groups[2]}-{groups[1]}-{groups[0]}"
+                break
+        
+        # Парсинг времени
+        time_val = None
+        time_match = re.search(r'(\d{1,2})\s*[:;]\s*(\d{2})(?:\s*[:;]\s*(\d{2}))?', text)
+        if time_match:
+            h, m, s = time_match.groups()
+            s = s or '00'
+            time_val = f"{int(h):02d}:{m}:{s}"
+        
+        # Парсинг температуры
+        temperature = None
+        temp_match = re.search(r'([+-]?\s*\d{1,2})\s*[°]?\s*[CС]', text)
+        if temp_match:
+            temp_str = temp_match.group(1).replace(' ', '')
+            temperature = f"{int(temp_str)}°C"
+        
+        # Парсинг ID камеры
+        camera_id = None
+        cam_patterns = [
+            r'CAM\w*\s*[:#]?\s*(\w+)',
+            r'ID\s*[:#]?\s*(\w+)',
+            r'CAMERA\s*[:#]?\s*(\w+)',
+        ]
+        for pattern in cam_patterns:
+            match = re.search(pattern, text)
+            if match:
+                camera_id = match.group(1)
+                break
+        
+        return {
+            'date': date,
+            'time': time_val,
+            'temperature': temperature,
+            'camera_id': camera_id,
+        }
+        
+    except Exception as e:
+        return {'date': None, 'time': None, 'temperature': None, 'camera_id': None}
+
+
+# =============================================================================
+# МОДЕЛЬ
+# =============================================================================
+def load_model(checkpoint_path, device='cuda'):
+    """Загрузка модели DINO"""
+    from models.dino import build_dino
+    from util.slconfig import SLConfig
+    
+    print(f"[MODEL] Загрузка конфигурации...")
+    config_path = "DINO/config/DINO/DINO_4scale_swinv2_zapovednik.py"
+    cfg = SLConfig.fromfile(config_path)
+    cfg.device = device
+    
+    print(f"[MODEL] Построение модели...")
+    model, criterion, postprocessors = build_dino(cfg)
+    model.to(device)
+    
+    print(f"[MODEL] Загрузка весов из {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    model.eval()
+    
+    epoch = checkpoint.get('epoch', 'unknown')
+    print(f"[MODEL] Модель загружена (эпоха: {epoch})")
+    
+    return model, postprocessors
+
+
+def run_inference_single(model, postprocessors, image_path, device='cuda'):
+    """Инференс на одном изображении - возвращает ВСЕ детекции"""
+    transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    
+    img = Image.open(image_path).convert('RGB')
+    orig_w, orig_h = img.size
+    
+    img_tensor = transform(img).unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        outputs = model(img_tensor)
+    
+    orig_size = torch.tensor([[orig_h, orig_w]], device=device)
+    results = postprocessors['bbox'](outputs, orig_size)[0]
+    
+    scores = results['scores'].cpu().numpy()
+    labels = results['labels'].cpu().numpy()
+    boxes = results['boxes'].cpu().numpy()
+    
+    detections = []
+    for score, label, box in zip(scores, labels, boxes):
+        x1, y1, x2, y2 = box
+        detections.append({
+            'score': float(score),
+            'class_id': int(label),
+            'bbox': [float(x1), float(y1), float(x2 - x1), float(y2 - y1)]
+        })
+    
+    return detections
+
+
+# =============================================================================
+# ROC AUC
+# =============================================================================
+def compute_iou(box1, box2):
+    """Compute IoU between two boxes [x, y, w, h]"""
+    x1, y1, w1, h1 = box1
+    x2, y2, w2, h2 = box2
+    
+    box1_x2, box1_y2 = x1 + w1, y1 + h1
+    box2_x2, box2_y2 = x2 + w2, y2 + h2
+    
+    inter_x1 = max(x1, x2)
+    inter_y1 = max(y1, y2)
+    inter_x2 = min(box1_x2, box2_x2)
+    inter_y2 = min(box1_y2, box2_y2)
+    
+    inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    
+    box1_area = w1 * h1
+    box2_area = w2 * h2
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / union_area if union_area > 0 else 0
+
+
+def match_detections(detections, gt_annotations, iou_threshold=0.5):
+    """Сопоставление детекций с ground truth"""
+    results = []
+    
+    gt_by_class = defaultdict(list)
+    for ann in gt_annotations:
+        gt_by_class[ann['category_id']].append(ann['bbox'])
+    
+    matched_gt = defaultdict(set)
+    sorted_dets = sorted(detections, key=lambda x: x['score'], reverse=True)
+    
+    for det in sorted_dets:
+        class_id = det['class_id']
+        score = det['score']
+        det_box = det['bbox']
+        
+        best_iou = 0
+        best_gt_idx = -1
+        
+        for gt_idx, gt_box in enumerate(gt_by_class.get(class_id, [])):
+            if gt_idx in matched_gt[class_id]:
+                continue
+            
+            iou = compute_iou(det_box, gt_box)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = gt_idx
+        
+        is_tp = best_iou >= iou_threshold and best_gt_idx >= 0
+        
+        if is_tp:
+            matched_gt[class_id].add(best_gt_idx)
+        
+        results.append({
+            'score': score,
+            'is_tp': is_tp,
+            'class_id': class_id,
+        })
+    
+    return results
+
+
+def compute_roc_auc(all_results):
+    """Compute mean ROC AUC across all classes"""
+    by_class = defaultdict(lambda: {'scores': [], 'labels': []})
+    
+    for r in all_results:
+        class_id = r['class_id']
+        by_class[class_id]['scores'].append(r['score'])
+        by_class[class_id]['labels'].append(1 if r['is_tp'] else 0)
+    
+    class_aucs = {}
+    
+    for class_id, data in by_class.items():
+        scores = np.array(data['scores'])
+        labels = np.array(data['labels'])
+        
+        n_tp = labels.sum()
+        n_fp = len(labels) - n_tp
+        
+        if n_tp > 0 and n_fp > 0:
+            try:
+                auc = roc_auc_score(labels, scores)
+                class_aucs[class_id] = auc
+            except:
+                pass
+    
+    mean_auc = np.mean(list(class_aucs.values())) if class_aucs else 0
+    return mean_auc, class_aucs
+
+
+# =============================================================================
+# ОСНОВНАЯ ФУНКЦИЯ
+# =============================================================================
+def run_analysis(args):
+    """Основная функция анализа"""
     
     print("=" * 80)
-    print("  ИНФЕРЕНС DINO С ИЗВЛЕЧЕНИЕМ МЕТАДАННЫХ (OCR)")
+    print("  АНАЛИЗ МОДЕЛИ DINO ДЛЯ ДЕТЕКЦИИ ЖИВОТНЫХ")
     print("=" * 80)
+    print(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Images: {args.images_dir}")
+    print(f"Annotations: {args.annotations if args.annotations else 'Не указаны'}")
     print(f"Confidence threshold: {args.conf_threshold}")
     print(f"OCR: {'Включен' if args.use_ocr else 'Выключен'}")
     print("=" * 80)
     
-    # Загрузка модели
-    print("\n[1/3] Загрузка модели...")
+    # 1. Загрузка модели
+    print("\n[ШАГ 1/4] Загрузка модели...")
     model, postprocessors = load_model(args.checkpoint, args.device)
     
-    # Поиск изображений
-    print("\n[2/3] Поиск изображений...")
+    # 2. Поиск изображений
+    print("\n[ШАГ 2/4] Поиск изображений...")
     images_dir = Path(args.images_dir)
     
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
@@ -261,24 +370,49 @@ def run_full_inference(args):
         print("[ERROR] Изображения не найдены!")
         return
     
-    # Инференс
-    print("\n[3/3] Инференс...")
+    # Загрузка аннотаций (если есть)
+    gt_annotations = {}
+    if args.annotations and Path(args.annotations).exists():
+        print(f"[INFO] Загрузка аннотаций из {args.annotations}...")
+        with open(args.annotations, 'r', encoding='utf-8') as f:
+            coco_data = json.load(f)
+        
+        # Индексируем по имени файла
+        img_id_to_name = {img['id']: img['file_name'] for img in coco_data['images']}
+        for ann in coco_data['annotations']:
+            fname = img_id_to_name.get(ann['image_id'])
+            if fname:
+                if fname not in gt_annotations:
+                    gt_annotations[fname] = []
+                gt_annotations[fname].append(ann)
+        
+        print(f"[INFO] Загружено аннотаций для {len(gt_annotations)} изображений")
+    
+    # 3. Инференс
+    print("\n[ШАГ 3/4] Инференс...")
     
     all_detections = []
+    all_roc_results = []
     species_count = defaultdict(int)
     
     for i, image_path in enumerate(image_files):
         # Детекция
-        detections = run_inference_single(model, postprocessors, str(image_path), 
-                                          args.device, args.conf_threshold)
+        detections = run_inference_single(model, postprocessors, str(image_path), args.device)
+        
+        # ROC AUC matching (если есть аннотации)
+        if image_path.name in gt_annotations:
+            matches = match_detections(detections, gt_annotations[image_path.name])
+            all_roc_results.extend(matches)
         
         # OCR метаданные
         metadata = {'date': None, 'time': None, 'temperature': None, 'camera_id': None}
-        if args.use_ocr and detections:
+        high_conf_dets = [d for d in detections if d['score'] >= args.conf_threshold]
+        
+        if args.use_ocr and high_conf_dets:
             metadata = extract_metadata_ocr(str(image_path))
         
-        # Записываем детекции
-        for det in detections:
+        # Записываем детекции выше порога
+        for det in high_conf_dets:
             class_id = det['class_id']
             class_name = CLASS_NAMES.get(class_id, f'class_{class_id}')
             class_name_ru = CLASS_NAMES_RU.get(class_id, class_name)
@@ -303,11 +437,41 @@ def run_full_inference(args):
     
     print(f"[INFO] Всего детекций: {len(all_detections)}")
     
+    # 4. Расчёт метрик
+    print("\n[ШАГ 4/4] Расчёт метрик и сохранение...")
+    
     # Создание выходной директории
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
     
-    # ТАБЛИЦА 1: Количество особей по видам (summary_by_species.csv)
+    # ==========================================================================
+    # ROC AUC SCORE
+    # ==========================================================================
+    mean_auc = 0.0
+    class_aucs = {}
+    
+    if all_roc_results:
+        mean_auc, class_aucs = compute_roc_auc(all_roc_results)
+    
+    print("\n" + "=" * 80)
+    print("  ROC AUC SCORE")
+    print("=" * 80)
+    
+    if class_aucs:
+        print(f"{'Класс':<25} {'ROC AUC':>10}")
+        print("-" * 40)
+        for class_id in sorted(class_aucs.keys()):
+            class_name = CLASS_NAMES_RU.get(class_id, f'class_{class_id}')
+            print(f"{class_name:<25} {class_aucs[class_id]:>10.4f}")
+        print("-" * 40)
+        print(f"{'MEAN ROC AUC':<25} {mean_auc:>10.4f}")
+    else:
+        print("[INFO] Аннотации не предоставлены - ROC AUC не рассчитан")
+        print("[INFO] Для расчёта ROC AUC используйте --annotations path/to/instances.json")
+    
+    # ==========================================================================
+    # ТАБЛИЦА 1: Количество особей по видам
+    # ==========================================================================
     print("\n" + "=" * 80)
     print("  ТАБЛИЦА 1: КОЛИЧЕСТВО ОСОБЕЙ ПО ВИДАМ")
     print("=" * 80)
@@ -318,7 +482,7 @@ def run_full_inference(args):
         writer.writerow(['Вид (EN)', 'Вид (RU)', 'Количество особей'])
         
         print(f"{'Вид':<25} {'Количество':>15}")
-        print("-" * 40)
+        print("-" * 45)
         
         for class_id in sorted(CLASS_NAMES.keys()):
             class_name = CLASS_NAMES[class_id]
@@ -329,15 +493,16 @@ def run_full_inference(args):
                 writer.writerow([class_name, class_name_ru, count])
                 print(f"{class_name_ru:<25} {count:>15}")
         
-        # Итого
         total = sum(species_count.values())
         writer.writerow(['TOTAL', 'ИТОГО', total])
-        print("-" * 40)
+        print("-" * 45)
         print(f"{'ИТОГО':<25} {total:>15}")
     
     print(f"\n[SAVED] {summary_file}")
     
-    # ТАБЛИЦА 2: Детальный анализ по фреймам (detailed_detections.csv)
+    # ==========================================================================
+    # ТАБЛИЦА 2: Детальный анализ по фреймам
+    # ==========================================================================
     print("\n" + "=" * 80)
     print("  ТАБЛИЦА 2: АНАЛИЗ ПО ФРЕЙМАМ")
     print("=" * 80)
@@ -362,9 +527,6 @@ def run_full_inference(args):
                 'bbox': str(det['bbox']),
             })
     
-    print(f"[SAVED] {detailed_file}")
-    
-    # Показываем первые 10 строк таблицы 2
     print(f"\n{'Файл':<30} {'Вид':<15} {'Дата':<12} {'Время':<10} {'Темп':<8} {'Камера':<8}")
     print("-" * 90)
     for det in all_detections[:10]:
@@ -374,48 +536,64 @@ def run_full_inference(args):
     if len(all_detections) > 10:
         print(f"... и ещё {len(all_detections) - 10} записей")
     
+    print(f"\n[SAVED] {detailed_file}")
+    
     # JSON с результатами
-    json_file = output_dir / "inference_results.json"
+    json_file = output_dir / "analysis_results.json"
     with open(json_file, 'w', encoding='utf-8') as f:
         json.dump({
             'checkpoint': args.checkpoint,
             'images_dir': str(args.images_dir),
             'date': datetime.now().isoformat(),
+            'mean_roc_auc': mean_auc,
+            'class_roc_auc': {CLASS_NAMES.get(k, str(k)): v for k, v in class_aucs.items()},
             'total_images': len(image_files),
             'total_detections': len(all_detections),
             'species_count': dict(species_count),
-            'detections': all_detections
         }, f, indent=2, ensure_ascii=False)
     
-    print(f"\n[SAVED] {json_file}")
+    print(f"[SAVED] {json_file}")
     
+    # ==========================================================================
+    # ИТОГОВЫЙ РЕЗУЛЬТАТ
+    # ==========================================================================
     print("\n" + "=" * 80)
-    print("  ГОТОВО!")
+    print("  ИТОГОВЫЙ РЕЗУЛЬТАТ")
     print("=" * 80)
-    print(f"Результаты сохранены в: {output_dir}/")
-    print(f"  - summary_by_species.csv (Таблица 1: количество особей)")
-    print(f"  - detailed_detections.csv (Таблица 2: анализ по фреймам)")
-    print(f"  - inference_results.json (полные данные)")
+    print(f"  Обработано изображений: {len(image_files)}")
+    print(f"  Найдено животных: {len(all_detections)}")
+    print(f"  Уникальных видов: {len(species_count)}")
+    if mean_auc > 0:
+        print(f"  MEAN ROC AUC: {mean_auc:.4f}")
     print("=" * 80)
+    print(f"\n  Результаты сохранены в: {output_dir}/")
+    print(f"    - summary_by_species.csv    (Таблица 1)")
+    print(f"    - detailed_detections.csv   (Таблица 2)")
+    print(f"    - analysis_results.json")
+    print("=" * 80)
+    
+    return mean_auc
 
 
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Инференс DINO с OCR метаданными")
+    parser = argparse.ArgumentParser(description="Анализ модели DINO для детекции животных")
     parser.add_argument("--checkpoint", type=str, default="output_dino/checkpoint.pth",
                        help="Путь к checkpoint модели")
     parser.add_argument("--images_dir", type=str, required=True,
                        help="Папка с изображениями для анализа")
+    parser.add_argument("--annotations", type=str, default=None,
+                       help="Путь к файлу аннотаций (COCO JSON) для расчёта ROC AUC")
     parser.add_argument("--conf_threshold", type=float, default=0.3,
                        help="Порог уверенности для детекций (default: 0.3)")
     parser.add_argument("--use_ocr", action="store_true", default=True,
-                       help="Использовать OCR для извлечения метаданных (default: True)")
+                       help="Использовать OCR для извлечения метаданных")
     parser.add_argument("--no_ocr", action="store_true",
                        help="Отключить OCR")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Устройство: cuda или cpu")
-    parser.add_argument("--output_dir", type=str, default="inference_results",
+    parser.add_argument("--output_dir", type=str, default="results",
                        help="Папка для сохранения результатов")
     
     args = parser.parse_args()
@@ -436,7 +614,7 @@ def main():
         print("[WARN] CUDA недоступна, переключение на CPU")
         args.device = "cpu"
     
-    run_full_inference(args)
+    run_analysis(args)
 
 
 if __name__ == "__main__":
