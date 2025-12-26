@@ -118,29 +118,57 @@ def extract_metadata_ocr(image_path):
         
         text = ' '.join(results).upper()
         
-        # Парсинг даты
+        # Парсинг даты (поддерживаемые форматы: YYYY/MM/DD, DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD)
         date = None
-        date_patterns = [
-            r'(\d{2})[./](\d{2})[./](20\d{2})',
-            r'(20\d{2})-(\d{2})-(\d{2})',
-        ]
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if match:
-                groups = match.groups()
-                if len(groups[0]) == 4:
-                    date = f"{groups[0]}-{groups[1]}-{groups[2]}"
-                else:
-                    date = f"{groups[2]}-{groups[1]}-{groups[0]}"
-                break
         
-        # Парсинг времени
+        # Формат YYYY/MM/DD (как на фотоловушках)
+        match = re.search(r'(20\d{2})\s*[/]\s*(\d{2})\s*[/]\s*(\d{2})', text)
+        if match:
+            y, m, d = match.groups()
+            date = f"{y}-{m}-{d}"
+        
+        # Формат DD.MM.YYYY или DD/MM/YYYY
+        if not date:
+            match = re.search(r'(\d{2})\s*[./]\s*(\d{2})\s*[./]\s*(20\d{2})', text)
+            if match:
+                d, m, y = match.groups()
+                date = f"{y}-{m}-{d}"
+        
+        # Формат YYYY-MM-DD
+        if not date:
+            match = re.search(r'(20\d{2})\s*-\s*(\d{2})\s*-\s*(\d{2})', text)
+            if match:
+                y, m, d = match.groups()
+                date = f"{y}-{m}-{d}"
+        
+        # Парсинг времени (формат HH:MM:SS или HH:MM)
+        # OCR может распознавать : как ; * . 8 или с пробелами
         time_val = None
-        time_match = re.search(r'(\d{1,2})\s*[:;]\s*(\d{2})(?:\s*[:;]\s*(\d{2}))?', text)
+        
+        # Ищем полный формат HH:MM:SS (с разными разделителями)
+        time_match = re.search(r'(\d{1,2})\s*[:;*\.]\s*(\d{2})\s*[:;*\.]\s*(\d{2})', text)
         if time_match:
             h, m, s = time_match.groups()
-            s = s or '00'
             time_val = f"{int(h):02d}:{m}:{s}"
+        else:
+            # Формат типа 14*16834 (OCR читает : как 8, всё слилось)
+            # Пытаемся найти 6-значное число после разделителя
+            time_match = re.search(r'(\d{1,2})\s*[:;*\.]\s*(\d{2})\d?(\d{2})', text)
+            if time_match:
+                h, m, s = time_match.groups()
+                time_val = f"{int(h):02d}:{m}:{s}"
+            else:
+                # Формат типа HHMMSS (6 цифр подряд после даты)
+                time_match = re.search(r'(?:\d{4}[/.-]\d{2}[/.-]\d{2}\s+)(\d{2})(\d{2})(\d{2})', text)
+                if time_match:
+                    h, m, s = time_match.groups()
+                    time_val = f"{int(h):02d}:{m}:{s}"
+                else:
+                    # Ищем короткий формат HH:MM
+                    time_match = re.search(r'(\d{1,2})\s*[:;*\.]\s*(\d{2})', text)
+                    if time_match:
+                        h, m = time_match.groups()
+                        time_val = f"{int(h):02d}:{m}:00"
         
         # Парсинг температуры
         temperature = None
