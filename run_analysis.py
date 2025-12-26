@@ -43,44 +43,44 @@ ocr_reader = None
 
 
 # =============================================================================
-# КЛАССЫ ЖИВОТНЫХ
+# КЛАССЫ ЖИВОТНЫХ (0-indexed, как выдаёт модель)
 # =============================================================================
 CLASS_NAMES = {
-    1: 'mountain_hare',      # Заяц-беляк
-    2: 'badger',             # Барсук
-    3: 'raccoon_dog',        # Енотовидная собака
-    4: 'moose',              # Лось
-    5: 'bear',               # Медведь
-    6: 'wolf',               # Волк
-    7: 'lynx',               # Рысь
-    8: 'boar',               # Кабан
-    9: 'fox',                # Лиса
-    10: 'capercaillie',      # Глухарь
-    11: 'black_grouse',      # Тетерев
-    12: 'crane',             # Журавль
-    13: 'jay',               # Сойка
-    14: 'mistle_thrush',     # Дрозд-деряба
-    15: 'white_wagtail',     # Белая трясогузка
-    16: 'deer',              # Олень
+    0: 'mountain_hare',      # Заяц-беляк
+    1: 'badger',             # Барсук
+    2: 'raccoon_dog',        # Енотовидная собака
+    3: 'moose',              # Лось
+    4: 'bear',               # Медведь
+    5: 'wolf',               # Волк
+    6: 'lynx',               # Рысь
+    7: 'boar',               # Кабан
+    8: 'fox',                # Лиса
+    9: 'capercaillie',       # Глухарь
+    10: 'black_grouse',      # Тетерев
+    11: 'crane',             # Журавль
+    12: 'jay',               # Сойка
+    13: 'mistle_thrush',     # Дрозд-деряба
+    14: 'white_wagtail',     # Белая трясогузка
+    15: 'deer',              # Олень
 }
 
 CLASS_NAMES_RU = {
-    1: 'Заяц-беляк',
-    2: 'Барсук',
-    3: 'Енотовидная собака',
-    4: 'Лось',
-    5: 'Медведь',
-    6: 'Волк',
-    7: 'Рысь',
-    8: 'Кабан',
-    9: 'Лиса',
-    10: 'Глухарь',
-    11: 'Тетерев',
-    12: 'Журавль',
-    13: 'Сойка',
-    14: 'Дрозд-деряба',
-    15: 'Белая трясогузка',
-    16: 'Олень',
+    0: 'Заяц-беляк',
+    1: 'Барсук',
+    2: 'Енотовидная собака',
+    3: 'Лось',
+    4: 'Медведь',
+    5: 'Волк',
+    6: 'Рысь',
+    7: 'Кабан',
+    8: 'Лиса',
+    9: 'Глухарь',
+    10: 'Тетерев',
+    11: 'Журавль',
+    12: 'Сойка',
+    13: 'Дрозд-деряба',
+    14: 'Белая трясогузка',
+    15: 'Олень',
 }
 
 
@@ -261,7 +261,11 @@ def compute_iou(box1, box2):
 
 
 def match_detections(detections, gt_annotations, iou_threshold=0.5):
-    """Сопоставление детекций с ground truth"""
+    """Сопоставление детекций с ground truth
+    
+    Примечание: модель выдаёт class_id 0-15, а COCO аннотации используют category_id 1-16
+    Поэтому при сопоставлении добавляем +1 к class_id модели
+    """
     results = []
     
     gt_by_class = defaultdict(list)
@@ -273,14 +277,16 @@ def match_detections(detections, gt_annotations, iou_threshold=0.5):
     
     for det in sorted_dets:
         class_id = det['class_id']
+        # Модель выдаёт 0-15, COCO использует 1-16
+        coco_category_id = class_id + 1
         score = det['score']
         det_box = det['bbox']
         
         best_iou = 0
         best_gt_idx = -1
         
-        for gt_idx, gt_box in enumerate(gt_by_class.get(class_id, [])):
-            if gt_idx in matched_gt[class_id]:
+        for gt_idx, gt_box in enumerate(gt_by_class.get(coco_category_id, [])):
+            if gt_idx in matched_gt[coco_category_id]:
                 continue
             
             iou = compute_iou(det_box, gt_box)
@@ -291,7 +297,7 @@ def match_detections(detections, gt_annotations, iou_threshold=0.5):
         is_tp = best_iou >= iou_threshold and best_gt_idx >= 0
         
         if is_tp:
-            matched_gt[class_id].add(best_gt_idx)
+            matched_gt[coco_category_id].add(best_gt_idx)
         
         results.append({
             'score': score,

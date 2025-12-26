@@ -1,0 +1,38 @@
+{
+  "checkpoint": "output_dino/checkpoint.pth",
+  "images_dir": "coco_dataset_final\\val2017",
+  "date": "2025-12-26T09:33:36.097683",
+  "mean_roc_auc": 0.9830616318469083,
+  "class_roc_auc": {
+    "raccoon_dog": 0.9920026713883643,
+    "jay": 0.9974387373667452,
+    "wolf": 1.0,
+    "fox": 1.0,
+    "bear": 1.0,
+    "capercaillie": 0.8621781773600327,
+    "white_wagtail": 1.0,
+    "0": 0.978603601000235,
+    "mistle_thrush": 0.9947990543735225,
+    "moose": 1.0,
+    "badger": 0.954778972520908,
+    "lynx": 1.0,
+    "boar": 1.0
+  },
+  "total_images": 367,
+  "total_detections": 306,
+  "species_count": {
+    "raccoon_dog": 81,
+    "moose": 9,
+    "class_0": 93,
+    "capercaillie": 6,
+    "jay": 1,
+    "fox": 22,
+    "bear": 5,
+    "badger": 3,
+    "white_wagtail": 75,
+    "boar": 3,
+    "wolf": 1,
+    "mistle_thrush": 3,
+    "lynx": 4
+  }
+}

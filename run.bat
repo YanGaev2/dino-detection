@@ -60,24 +60,38 @@ if not exist "output_dino\checkpoint.pth" (
 )
 
 REM Проверка параметров
-set IMAGES_DIR=%1
-set ANNOTATIONS=%2
+set DATASET_PATH=%1
 
-if "%IMAGES_DIR%"=="" (
-    echo [INFO] Использование:
-    echo.
-    echo   run.bat ^<путь_к_изображениям^> [путь_к_аннотациям]
-    echo.
-    echo   Примеры:
-    echo     run.bat my_images
-    echo     run.bat my_images annotations.json
-    echo.
-    echo   Папка должна содержать изображения (.jpg, .png)
-    echo   Аннотации (опционально) - для расчёта ROC AUC
-    echo.
-    pause
-    exit /b 1
+if "%DATASET_PATH%"=="" (
+    REM Если нет аргумента, проверяем coco_dataset_final
+    if exist "coco_dataset_final\val2017" (
+        set DATASET_PATH=coco_dataset_final
+        echo [INFO] Использую датасет по умолчанию: coco_dataset_final
+    ) else (
+        echo [INFO] Использование:
+        echo.
+        echo   run.bat ^<путь_к_датасету^>
+        echo.
+        echo   Примеры:
+        echo     run.bat coco_dataset_final
+        echo     run.bat my_dataset
+        echo.
+        echo   Датасет должен иметь структуру:
+        echo     dataset/
+        echo       ├── annotations/
+        echo       │   └── instances_val2017.json
+        echo       └── val2017/
+        echo           ├── image1.jpg
+        echo           └── image2.png
+        echo.
+        pause
+        exit /b 1
+    )
 )
+
+REM Определяем пути к изображениям и аннотациям
+set IMAGES_DIR=%DATASET_PATH%\val2017
+set ANNOTATIONS=%DATASET_PATH%\annotations\instances_val2017.json
 
 REM Проверка папки с изображениями
 if not exist "%IMAGES_DIR%" (
@@ -86,7 +100,15 @@ if not exist "%IMAGES_DIR%" (
     exit /b 1
 )
 
+REM Проверка файла аннотаций
+if not exist "%ANNOTATIONS%" (
+    echo [WARN] Файл аннотаций не найден: %ANNOTATIONS%
+    echo [WARN] ROC AUC не будет рассчитан
+    set ANNOTATIONS=
+)
+
 echo [INFO] Checkpoint: output_dino\checkpoint.pth
+echo [INFO] Dataset: %DATASET_PATH%
 echo [INFO] Images: %IMAGES_DIR%
 if not "%ANNOTATIONS%"=="" (
     echo [INFO] Annotations: %ANNOTATIONS%
