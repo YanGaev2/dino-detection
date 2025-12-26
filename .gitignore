@@ -1,0 +1,57 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Checkpoints (too large for git - download separately)
+output_dino/*.pth
+output_dino/eval/
+
+# Datasets (too large for git)
+coco_dataset_final/
+dataset/
+*.jpg
+*.png
+*.jpeg
+
+# Build files
+*.egg-info/
+build/
+dist/
+*.egg
+
+# CUDA compiled files
+DINO/models/dino/ops/build/
+DINO/models/dino/ops/*.egg-info/
+*.obj
+*.pyd
+*.exp
+*.lib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Results (regenerated on evaluation)
+evaluation_results/
+
+# Logs
+*.log
+output_dino/log.txt
+output_dino/info.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+

@@ -1,0 +1,22 @@
+# Зависимости для бенчмарка backbones DINO
+# Установка: pip install -r requirements.txt
+
+# PyTorch (установите версию для вашей CUDA)
+# Для CUDA 12.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Работа с изображениями
+Pillow>=9.0.0
+
+# Конфигурация YOLO
+PyYAML>=6.0
+
+# Числовые операции
+numpy>=1.21.0
+
+# Опционально: для DINO
+# scipy>=1.7.0
+# pycocotools>=2.0.6
+# timm>=0.9.0
+
