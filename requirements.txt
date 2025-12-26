@@ -1,22 +1,35 @@
-# Зависимости для бенчмарка backbones DINO
+# Зависимости для DINO Animal Detection
 # Установка: pip install -r requirements.txt
 
 # PyTorch (установите версию для вашей CUDA)
-# Для CUDA 12.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# Для CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 torch>=2.0.0
 torchvision>=0.15.0
 
 # Работа с изображениями
 Pillow>=9.0.0
 
-# Конфигурация YOLO
+# Конфигурация
 PyYAML>=6.0
 
 # Числовые операции
 numpy>=1.21.0
+scipy>=1.7.0
 
-# Опционально: для DINO
-# scipy>=1.7.0
-# pycocotools>=2.0.6
-# timm>=0.9.0
+# COCO API
+pycocotools>=2.0.6
 
+# Timm для Swin Transformer
+timm>=0.9.0
+
+# OCR для извлечения метаданных
+easyocr>=1.7.0
+
+# Метрики
+scikit-learn>=1.0.0
+
+# Прогресс-бары
+tqdm>=4.64.0
+
+# Форматирование конфигов
+yapf>=0.40.0

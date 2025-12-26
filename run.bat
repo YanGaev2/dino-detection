@@ -7,22 +7,54 @@ echo   HSE Zapovednik Project
 echo ================================================================================
 echo.
 
-REM Проверка наличия папки venv
-if not exist "venv\Scripts\activate.bat" (
-    echo [ERROR] Виртуальное окружение не найдено!
-    echo         Создайте его командой: python -m venv venv
-    echo         Затем установите зависимости: pip install -r requirements.txt
+REM Проверка наличия Python
+where python >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Python не найден! Установите Python 3.10-3.12
     pause
     exit /b 1
+)
+
+REM Создание venv если не существует
+if not exist "venv\Scripts\activate.bat" (
+    echo [SETUP] Виртуальное окружение не найдено. Создаю...
+    python -m venv venv
+    if errorlevel 1 (
+        echo [ERROR] Не удалось создать виртуальное окружение
+        pause
+        exit /b 1
+    )
+    echo [SETUP] Виртуальное окружение создано
 )
 
 REM Активация виртуального окружения
 call venv\Scripts\activate.bat
 
+REM Проверка и установка зависимостей
+python -c "import torch" >nul 2>&1
+if errorlevel 1 (
+    echo [SETUP] Установка зависимостей... (это может занять 5-10 минут)
+    echo [SETUP] Устанавливаю PyTorch...
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --quiet
+    echo [SETUP] Устанавливаю остальные зависимости...
+    pip install -r requirements.txt --quiet
+    echo [SETUP] Установка завершена!
+)
+
+REM Проверка EasyOCR
+python -c "import easyocr" >nul 2>&1
+if errorlevel 1 (
+    echo [SETUP] Установка EasyOCR...
+    pip install easyocr --quiet
+    echo [SETUP] EasyOCR установлен
+)
+
 REM Проверка наличия checkpoint
 if not exist "output_dino\checkpoint.pth" (
+    echo.
     echo [ERROR] Checkpoint не найден: output_dino\checkpoint.pth
     echo         Скачайте checkpoint и поместите в папку output_dino
+    echo.
     pause
     exit /b 1
 )
@@ -81,4 +113,3 @@ echo     - detailed_detections.csv     (Таблица 2: анализ по фр
 echo     - analysis_results.json       (ROC AUC + полные данные)
 echo.
 pause
-
