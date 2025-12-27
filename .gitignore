@@ -9,13 +9,16 @@ __pycache__/
 *$py.class
 *.so
 
-# Checkpoints (too large for git - download separately)
-output_dino/*.pth
-output_dino/eval/
+# Checkpoints and training outputs (download checkpoint separately)
+output_dino/
 
 # Datasets (too large for git)
 coco_dataset_final/
+coco_dataset_full/
+coco_dataset_merged/
 dataset/
+yolo-dataset/
+yolo_inference_test/
 *.jpg
 *.png
 *.jpeg
@@ -42,6 +45,7 @@ DINO/models/dino/ops/*.egg-info/
 
 # Results (regenerated on evaluation)
 evaluation_results/
+results/
 
 # Logs
 *.log
