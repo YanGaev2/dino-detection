@@ -805,5 +805,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+        sys.exit(0)
+    except KeyboardInterrupt:
+        print("\n[INTERRUPTED] Анализ прерван пользователем")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n[FATAL ERROR] {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 

@@ -212,24 +212,45 @@ echo   OCR:          Включен
 echo ================================================================================
 echo.
 
-pause
+echo.
+echo Нажмите любую клавишу для запуска анализа...
+pause >nul
 
 REM Запуск анализа
+echo.
+echo [RUN] Запуск анализа...
+echo.
+
 if "%ANNOTATIONS%"=="" (
     python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir "%IMAGES_DIR%" --use_ocr
 ) else (
     python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir "%IMAGES_DIR%" --annotations "%ANNOTATIONS%" --format %FORMAT% --use_ocr
 )
 
+set PYTHON_EXIT_CODE=%errorlevel%
+
 echo.
 echo ================================================================================
-echo   АНАЛИЗ ЗАВЕРШЁН
-echo   Результаты сохранены в папке: results
+if %PYTHON_EXIT_CODE% EQU 0 (
+    echo   АНАЛИЗ ЗАВЕРШЁН УСПЕШНО
+    echo   Результаты сохранены в папке: results
+    echo ================================================================================
+    echo.
+    echo   Созданные файлы:
+    echo     - summary_by_species.csv      Таблица 1: количество особей
+    echo     - detailed_detections.csv     Таблица 2: анализ по фреймам
+    echo     - analysis_results.json       ROC AUC + полные данные
+) else (
+    echo   ОШИБКА ПРИ ВЫПОЛНЕНИИ АНАЛИЗА
+    echo   Код ошибки: %PYTHON_EXIT_CODE%
+    echo ================================================================================
+    echo.
+    echo   Проверьте:
+    echo     1. Установлены ли все зависимости
+    echo     2. Правильный ли путь к датасету
+    echo     3. Есть ли checkpoint в output_dino/
+)
 echo ================================================================================
 echo.
-echo   Созданные файлы:
-echo     - summary_by_species.csv      (Таблица 1: количество особей)
-echo     - detailed_detections.csv     (Таблица 2: анализ по фреймам)
-echo     - analysis_results.json       (ROC AUC + полные данные)
-echo.
-pause
+echo Нажмите любую клавишу для выхода...
+pause >nul
