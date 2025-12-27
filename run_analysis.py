@@ -202,6 +202,148 @@ def extract_metadata_ocr(image_path):
 
 
 # =============================================================================
+# ЗАГРУЗКА АННОТАЦИЙ (COCO / YOLO)
+# =============================================================================
+def load_coco_annotations(annotations_path):
+    """
+    Загрузка аннотаций в формате COCO JSON
+    Возвращает словарь: {filename: [annotations]}
+    """
+    print(f"[ANNOTATIONS] Загрузка COCO аннотаций из {annotations_path}...")
+    
+    with open(annotations_path, 'r', encoding='utf-8') as f:
+        coco_data = json.load(f)
+    
+    gt_annotations = {}
+    img_id_to_name = {img['id']: img['file_name'] for img in coco_data['images']}
+    img_id_to_size = {img['id']: (img['width'], img['height']) for img in coco_data['images']}
+    
+    for ann in coco_data['annotations']:
+        fname = img_id_to_name.get(ann['image_id'])
+        if fname:
+            if fname not in gt_annotations:
+                gt_annotations[fname] = []
+            gt_annotations[fname].append(ann)
+    
+    print(f"[ANNOTATIONS] Загружено COCO аннотаций для {len(gt_annotations)} изображений")
+    return gt_annotations
+
+
+def load_yolo_annotations(labels_dir, images_dir):
+    """
+    Загрузка аннотаций в формате YOLO (один .txt файл на изображение)
+    
+    Формат YOLO: class_id x_center y_center width height (normalized 0-1)
+    
+    Возвращает словарь: {filename: [annotations]} в формате похожем на COCO
+    """
+    print(f"[ANNOTATIONS] Загрузка YOLO аннотаций из {labels_dir}...")
+    
+    labels_path = Path(labels_dir)
+    images_path = Path(images_dir)
+    
+    gt_annotations = {}
+    total_anns = 0
+    
+    # Ищем все .txt файлы
+    label_files = list(labels_path.glob("*.txt"))
+    print(f"[ANNOTATIONS] Найдено {len(label_files)} файлов меток")
+    
+    for label_file in label_files:
+        # Имя файла без расширения
+        stem = label_file.stem
+        
+        # Ищем соответствующее изображение
+        image_file = None
+        for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
+            candidate = images_path / f"{stem}{ext}"
+            if candidate.exists():
+                image_file = candidate
+                break
+        
+        if not image_file:
+            continue
+        
+        # Получаем размеры изображения
+        try:
+            img = Image.open(image_file)
+            img_width, img_height = img.size
+        except Exception as e:
+            print(f"[WARN] Не удалось открыть {image_file}: {e}")
+            continue
+        
+        # Читаем аннотации
+        annotations = []
+        with open(label_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                
+                class_id = int(parts[0])
+                x_center = float(parts[1])
+                y_center = float(parts[2])
+                width = float(parts[3])
+                height = float(parts[4])
+                
+                # Конвертация из normalized YOLO в absolute pixel coordinates
+                x_min = (x_center - width / 2) * img_width
+                y_min = (y_center - height / 2) * img_height
+                box_w = width * img_width
+                box_h = height * img_height
+                
+                # Формат аннотации (похож на COCO)
+                ann = {
+                    'category_id': class_id + 1,  # COCO использует 1-indexed
+                    'bbox': [x_min, y_min, box_w, box_h],  # COCO формат: [x, y, w, h]
+                    'area': box_w * box_h,
+                }
+                annotations.append(ann)
+                total_anns += 1
+        
+        if annotations:
+            gt_annotations[image_file.name] = annotations
+    
+    print(f"[ANNOTATIONS] Загружено {total_anns} YOLO аннотаций для {len(gt_annotations)} изображений")
+    return gt_annotations
+
+
+def auto_detect_format(dataset_path):
+    """
+    Автоматическое определение формата датасета (COCO или YOLO)
+    Возвращает: 'coco', 'yolo' или None
+    """
+    dataset_path = Path(dataset_path)
+    
+    # Проверяем COCO формат
+    coco_annotations = dataset_path / "annotations" / "instances_val2017.json"
+    if coco_annotations.exists():
+        return 'coco'
+    
+    # Альтернативные COCO пути
+    for pattern in ["annotations/*.json", "*.json"]:
+        json_files = list(dataset_path.glob(pattern))
+        if json_files:
+            return 'coco'
+    
+    # Проверяем YOLO формат
+    yolo_labels = dataset_path / "labels"
+    if yolo_labels.exists() and list(yolo_labels.glob("*.txt")):
+        return 'yolo'
+    
+    # Альтернативный YOLO путь
+    yolo_labels_val = dataset_path / "labels" / "val"
+    if yolo_labels_val.exists() and list(yolo_labels_val.glob("*.txt")):
+        return 'yolo'
+    
+    return None
+
+
+# =============================================================================
 # МОДЕЛЬ
 # =============================================================================
 def load_model(checkpoint_path, device='cuda'):
@@ -406,21 +548,30 @@ def run_analysis(args):
     
     # Загрузка аннотаций (если есть)
     gt_annotations = {}
-    if args.annotations and Path(args.annotations).exists():
-        print(f"[INFO] Загрузка аннотаций из {args.annotations}...")
-        with open(args.annotations, 'r', encoding='utf-8') as f:
-            coco_data = json.load(f)
+    annotation_format = args.format
+    
+    if args.annotations:
+        ann_path = Path(args.annotations)
         
-        # Индексируем по имени файла
-        img_id_to_name = {img['id']: img['file_name'] for img in coco_data['images']}
-        for ann in coco_data['annotations']:
-            fname = img_id_to_name.get(ann['image_id'])
-            if fname:
-                if fname not in gt_annotations:
-                    gt_annotations[fname] = []
-                gt_annotations[fname].append(ann)
+        # Автоопределение формата
+        if annotation_format == 'auto':
+            if ann_path.is_file() and ann_path.suffix == '.json':
+                annotation_format = 'coco'
+                print(f"[INFO] Автоопределён формат: COCO (JSON файл)")
+            elif ann_path.is_dir() and list(ann_path.glob("*.txt")):
+                annotation_format = 'yolo'
+                print(f"[INFO] Автоопределён формат: YOLO (папка с .txt файлами)")
+            else:
+                print(f"[WARN] Не удалось определить формат аннотаций: {ann_path}")
+                annotation_format = None
         
-        print(f"[INFO] Загружено аннотаций для {len(gt_annotations)} изображений")
+        # Загрузка в зависимости от формата
+        if annotation_format == 'coco' and ann_path.exists():
+            gt_annotations = load_coco_annotations(str(ann_path))
+        elif annotation_format == 'yolo' and ann_path.exists():
+            gt_annotations = load_yolo_annotations(str(ann_path), args.images_dir)
+        else:
+            print(f"[WARN] Аннотации не загружены. ROC AUC не будет рассчитан.")
     
     # 3. Инференс
     print("\n[ШАГ 3/4] Инференс...")
@@ -618,7 +769,9 @@ def main():
     parser.add_argument("--images_dir", type=str, required=True,
                        help="Папка с изображениями для анализа")
     parser.add_argument("--annotations", type=str, default=None,
-                       help="Путь к файлу аннотаций (COCO JSON) для расчёта ROC AUC")
+                       help="Путь к файлу аннотаций (COCO JSON) или папке labels (YOLO)")
+    parser.add_argument("--format", type=str, choices=['coco', 'yolo', 'auto'], default='auto',
+                       help="Формат аннотаций: coco, yolo или auto (автоопределение)")
     parser.add_argument("--conf_threshold", type=float, default=0.3,
                        help="Порог уверенности для детекций (default: 0.3)")
     parser.add_argument("--use_ocr", action="store_true", default=True,

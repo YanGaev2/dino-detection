@@ -59,39 +59,135 @@ if not exist "output_dino\checkpoint.pth" (
     exit /b 1
 )
 
-REM Проверка параметров
+echo.
+echo ================================================================================
+echo   ВЫБЕРИТЕ ФОРМАТ ДАТАСЕТА
+echo ================================================================================
+echo.
+echo   1. COCO (JSON аннотации)
+echo      Структура:
+echo        dataset/
+echo          ├── annotations/
+echo          │   └── instances_val2017.json
+echo          └── val2017/
+echo              └── *.jpg, *.png
+echo.
+echo   2. YOLO (TXT аннотации - Ultralytics формат)
+echo      Структура:
+echo        dataset/
+echo          ├── labels/
+echo          │   └── *.txt (class x_center y_center w h)
+echo          └── images/
+echo              └── *.jpg, *.png
+echo.
+echo   3. Только изображения (без аннотаций, без ROC AUC)
+echo.
+echo ================================================================================
+
+set /p FORMAT_CHOICE="Введите номер формата (1/2/3): "
+
+if "%FORMAT_CHOICE%"=="1" (
+    set FORMAT=coco
+    echo [INFO] Выбран формат: COCO
+) else if "%FORMAT_CHOICE%"=="2" (
+    set FORMAT=yolo
+    echo [INFO] Выбран формат: YOLO
+) else if "%FORMAT_CHOICE%"=="3" (
+    set FORMAT=none
+    echo [INFO] Выбран режим: только изображения
+) else (
+    echo [ERROR] Неверный выбор. Используйте 1, 2 или 3
+    pause
+    exit /b 1
+)
+
+echo.
+
+REM Запрос пути к датасету
 set DATASET_PATH=%1
 
 if "%DATASET_PATH%"=="" (
-    REM Если нет аргумента, проверяем coco_dataset_final
-    if exist "coco_dataset_final\val2017" (
-        set DATASET_PATH=coco_dataset_final
-        echo [INFO] Использую датасет по умолчанию: coco_dataset_final
+    echo ================================================================================
+    echo   ВВЕДИТЕ ПУТЬ К ДАТАСЕТУ
+    echo ================================================================================
+    echo.
+    
+    if "%FORMAT%"=="coco" (
+        echo   Для COCO формата укажите корневую папку датасета.
+        echo   Пример: coco_dataset_final
+        echo.
+        if exist "coco_dataset_final" (
+            echo   [Найден датасет по умолчанию: coco_dataset_final]
+            echo   Нажмите Enter для использования или введите другой путь.
+            set /p DATASET_PATH="Путь к датасету: "
+            if "!DATASET_PATH!"=="" set DATASET_PATH=coco_dataset_final
+        ) else (
+            set /p DATASET_PATH="Путь к датасету: "
+        )
+    ) else if "%FORMAT%"=="yolo" (
+        echo   Для YOLO формата укажите корневую папку датасета.
+        echo   Папка должна содержать подпапки images/ и labels/
+        echo   Пример: my_yolo_dataset
+        echo.
+        set /p DATASET_PATH="Путь к датасету: "
     ) else (
-        echo [INFO] Использование:
+        echo   Укажите папку с изображениями.
+        echo   Пример: my_images
         echo.
-        echo   run.bat ^<путь_к_датасету^>
-        echo.
-        echo   Примеры:
-        echo     run.bat coco_dataset_final
-        echo     run.bat my_dataset
-        echo.
-        echo   Датасет должен иметь структуру:
-        echo     dataset/
-        echo       ├── annotations/
-        echo       │   └── instances_val2017.json
-        echo       └── val2017/
-        echo           ├── image1.jpg
-        echo           └── image2.png
-        echo.
-        pause
-        exit /b 1
+        set /p DATASET_PATH="Путь к изображениям: "
     )
 )
 
-REM Определяем пути к изображениям и аннотациям
-set IMAGES_DIR=%DATASET_PATH%\val2017
-set ANNOTATIONS=%DATASET_PATH%\annotations\instances_val2017.json
+REM Проверка что путь не пустой
+if "%DATASET_PATH%"=="" (
+    echo [ERROR] Путь к датасету не указан!
+    pause
+    exit /b 1
+)
+
+REM Определяем пути в зависимости от формата
+if "%FORMAT%"=="coco" (
+    REM COCO формат
+    if exist "%DATASET_PATH%\val2017" (
+        set IMAGES_DIR=%DATASET_PATH%\val2017
+    ) else if exist "%DATASET_PATH%\images\val" (
+        set IMAGES_DIR=%DATASET_PATH%\images\val
+    ) else if exist "%DATASET_PATH%\images" (
+        set IMAGES_DIR=%DATASET_PATH%\images
+    ) else (
+        set IMAGES_DIR=%DATASET_PATH%
+    )
+    
+    if exist "%DATASET_PATH%\annotations\instances_val2017.json" (
+        set ANNOTATIONS=%DATASET_PATH%\annotations\instances_val2017.json
+    ) else if exist "%DATASET_PATH%\annotations\instances_val.json" (
+        set ANNOTATIONS=%DATASET_PATH%\annotations\instances_val.json
+    ) else (
+        REM Ищем любой JSON в annotations
+        for %%f in ("%DATASET_PATH%\annotations\*.json") do set ANNOTATIONS=%%f
+    )
+) else if "%FORMAT%"=="yolo" (
+    REM YOLO формат
+    if exist "%DATASET_PATH%\images\val" (
+        set IMAGES_DIR=%DATASET_PATH%\images\val
+    ) else if exist "%DATASET_PATH%\images" (
+        set IMAGES_DIR=%DATASET_PATH%\images
+    ) else (
+        set IMAGES_DIR=%DATASET_PATH%
+    )
+    
+    if exist "%DATASET_PATH%\labels\val" (
+        set ANNOTATIONS=%DATASET_PATH%\labels\val
+    ) else if exist "%DATASET_PATH%\labels" (
+        set ANNOTATIONS=%DATASET_PATH%\labels
+    ) else (
+        set ANNOTATIONS=
+    )
+) else (
+    REM Только изображения
+    set IMAGES_DIR=%DATASET_PATH%
+    set ANNOTATIONS=
+)
 
 REM Проверка папки с изображениями
 if not exist "%IMAGES_DIR%" (
@@ -100,27 +196,29 @@ if not exist "%IMAGES_DIR%" (
     exit /b 1
 )
 
-REM Проверка файла аннотаций
-if not exist "%ANNOTATIONS%" (
-    echo [WARN] Файл аннотаций не найден: %ANNOTATIONS%
-    echo [WARN] ROC AUC не будет рассчитан
-    set ANNOTATIONS=
-)
-
-echo [INFO] Checkpoint: output_dino\checkpoint.pth
-echo [INFO] Dataset: %DATASET_PATH%
-echo [INFO] Images: %IMAGES_DIR%
-if not "%ANNOTATIONS%"=="" (
-    echo [INFO] Annotations: %ANNOTATIONS%
-)
-echo [INFO] OCR: Включен
 echo.
+echo ================================================================================
+echo   ПАРАМЕТРЫ АНАЛИЗА
+echo ================================================================================
+echo   Checkpoint:   output_dino\checkpoint.pth
+echo   Формат:       %FORMAT%
+echo   Изображения:  %IMAGES_DIR%
+if not "%ANNOTATIONS%"=="" (
+    echo   Аннотации:    %ANNOTATIONS%
+) else (
+    echo   Аннотации:    [не указаны - ROC AUC не будет рассчитан]
+)
+echo   OCR:          Включен
+echo ================================================================================
+echo.
+
+pause
 
 REM Запуск анализа
 if "%ANNOTATIONS%"=="" (
-    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir %IMAGES_DIR% --use_ocr
+    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir "%IMAGES_DIR%" --use_ocr
 ) else (
-    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir %IMAGES_DIR% --annotations %ANNOTATIONS% --use_ocr
+    python run_analysis.py --checkpoint output_dino/checkpoint.pth --images_dir "%IMAGES_DIR%" --annotations "%ANNOTATIONS%" --format %FORMAT% --use_ocr
 )
 
 echo.
